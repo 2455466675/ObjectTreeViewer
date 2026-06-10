@@ -1,0 +1,12 @@
+# Unity UPM 包：.meta 文件需要纳入版本控制，此处仅忽略系统与编辑器临时文件
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# IDE / 编辑器
+.idea/
+.vs/
+*.csproj
+*.sln
+*.user

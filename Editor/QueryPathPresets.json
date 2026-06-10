@@ -1,0 +1,11 @@
+{
+    "paths": [
+        "GameData.I",
+        "CTavernBox.s_ConfigList",
+        "CTavernBox.ConfigList",
+        "CFreeChoiceBox.ConfigList",
+        "GameData.I.TaskData",
+        "ActivityMgr.I",
+        "GameData.I.GrowthScoreData"
+    ]
+}
