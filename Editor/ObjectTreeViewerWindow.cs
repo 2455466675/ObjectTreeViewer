@@ -46,7 +46,7 @@ namespace ObjectTreeViewerTool
         void IObjectTreeViewHost.GoBack() => GoBack();
         void IObjectTreeViewHost.RefreshTree(int? selectNodeId) => RefreshTree(selectNodeId);
 
-        [MenuItem("Zjwg/对象树查看器")]
+        [MenuItem("Window/ObjectTreeViewer")]
         public static void ShowWindow()
         {
             GetWindow<ObjectTreeViewerWindow>("对象树查看器");
