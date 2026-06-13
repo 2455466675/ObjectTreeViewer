@@ -13,15 +13,6 @@ namespace ObjectTreeViewerTool
     /// </summary>
     internal sealed class MemberFilter
     {
-        // 命名空间前缀过滤：这些命名空间的类型要么是引擎/反射基础设施，
-        // 要么展开后牵出庞大且与业务数据无关的对象图
-        private static readonly string[] ExcludedNamespacePrefixes =
-        {
-            "UnityEngine",
-            "UnityEditor",
-            "System.Reflection",
-        };
-
         // 基类/接口过滤：用 IsAssignableFrom 覆盖全部子类，
         // 否则像 FileStream、具体委托类型等会从精确匹配中漏过
         private static readonly Type[] ExcludedBaseTypes =
@@ -50,10 +41,12 @@ namespace ObjectTreeViewerTool
         };
 
         private readonly ReflectionInspector inspector;
+        private readonly IReadOnlyList<string> excludedNamespacePrefixes;
 
-        public MemberFilter(ReflectionInspector inspector)
+        public MemberFilter(ReflectionInspector inspector, IReadOnlyList<string> excludedNamespacePrefixes)
         {
             this.inspector = inspector;
+            this.excludedNamespacePrefixes = excludedNamespacePrefixes ?? Array.Empty<string>();
         }
 
         public bool ShouldInclude(FieldInfo field)
@@ -89,7 +82,7 @@ namespace ObjectTreeViewerTool
         }
 
         // 汇总三档类型过滤规则
-        private static bool IsExcludedType(Type type)
+        private bool IsExcludedType(Type type)
         {
             if (type == null)
             {
@@ -112,20 +105,28 @@ namespace ObjectTreeViewerTool
             return IsExcludedNamespace(type);
         }
 
-        private static bool IsExcludedNamespace(Type type)
+        private bool IsExcludedNamespace(Type type) =>
+            NamespaceExclusion.IsExcluded(type, excludedNamespacePrefixes);
+    }
+
+    /// <summary>
+    /// 按配置的前缀列表判断类型的命名空间是否应被排除。
+    /// </summary>
+    internal static class NamespaceExclusion
+    {
+        public static bool IsExcluded(Type type, IReadOnlyList<string> excludedNamespacePrefixes)
         {
+            if (type == null || excludedNamespacePrefixes == null || excludedNamespacePrefixes.Count == 0)
+                return false;
+
             var ns = type.Namespace;
             if (string.IsNullOrEmpty(ns))
-            {
                 return false;
-            }
 
-            foreach (var prefix in ExcludedNamespacePrefixes)
+            foreach (var prefix in excludedNamespacePrefixes)
             {
-                if (ns.StartsWith(prefix, StringComparison.Ordinal))
-                {
+                if (!string.IsNullOrEmpty(prefix) && ns.StartsWith(prefix, StringComparison.Ordinal))
                     return true;
-                }
             }
 
             return false;

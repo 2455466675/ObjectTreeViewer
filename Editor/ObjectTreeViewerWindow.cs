@@ -21,7 +21,7 @@ namespace ObjectTreeViewerTool
         private NodePresenter presenter;
         private ValueWriter valueWriter;
         private TreeSearchController search;
-        private QueryPathPresetStore presetStore;
+        private ViewerConfigStore configStore;
         private TreeJsonExporter exporter;
 
         // ——— 运行状态 ———
@@ -46,7 +46,7 @@ namespace ObjectTreeViewerTool
         void IObjectTreeViewHost.GoBack() => GoBack();
         void IObjectTreeViewHost.RefreshTree(int? selectNodeId) => RefreshTree(selectNodeId);
 
-        [MenuItem("Window/ObjectTreeViewer")]
+        [MenuItem("Window/对象树查看器")]
         public static void ShowWindow()
         {
             GetWindow<ObjectTreeViewerWindow>("对象树查看器");
@@ -57,19 +57,19 @@ namespace ObjectTreeViewerTool
             treeViewState ??= new TreeViewState();
 
             inspector = new ReflectionInspector();
-            memberFilter = new MemberFilter(inspector);
-            pathResolver = new MemberPathResolver();
+            configStore = new ViewerConfigStore();
+            memberFilter = new MemberFilter(inspector, configStore.ExcludedNamespacePrefixes);
+            pathResolver = new MemberPathResolver(configStore.ExcludedNamespacePrefixes);
             buildOptions = new ObjectTreeBuilder.Options { MaxDepth = 5, MaxNodeCount = 20000 };
             presenter = new NodePresenter();
             valueWriter = new ValueWriter(new ValueConverter());
             search = new TreeSearchController(() => rootNode, () => treeView, Repaint);
 
-            presetStore = new QueryPathPresetStore();
             exporter = new TreeJsonExporter();            // 若存在预定义路径，默认显示并填充第一条
-            if (presetStore.HasPaths)
+            if (configStore.HasPaths)
             {
                 presetSelectedIndex = 0;
-                memberPath = presetStore.Paths[0];
+                memberPath = configStore.Paths[0];
             }
         }
 
@@ -137,9 +137,9 @@ namespace ObjectTreeViewerTool
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("预定义路径:", EditorStyles.boldLabel, GUILayout.Width(80));
 
-            if (presetStore.HasPaths)
+            if (configStore.HasPaths)
             {
-                var options = presetStore.Paths.ToArray();
+                var options = configStore.Paths.ToArray();
                 if (presetSelectedIndex < 0 || presetSelectedIndex >= options.Length)
                     presetSelectedIndex = 0;
 
@@ -148,31 +148,35 @@ namespace ObjectTreeViewerTool
                 {
                     presetSelectedIndex = newIndex;
                     // 仅填充输入框，由用户手动点击"获取对象"触发查询
-                    memberPath = presetStore.Paths[newIndex];
+                    memberPath = configStore.Paths[newIndex];
                     GUI.FocusControl(null);
                 }
             }
             else
             {
                 // 无预定义路径：用主项提示用户在该 JSON 文件中创建
-                var hint = $"在此创建预定义路径: {presetStore.JsonFilePath}";
+                var hint = $"在此创建预定义路径: {configStore.JsonFilePath}";
                 EditorGUILayout.Popup(0, new[] { hint });
             }
 
             // 重新加载按钮，便于手动编辑 JSON 后刷新
             if (GUILayout.Button("↻", GUILayout.Width(24)))
-                ReloadPresets();
+                ReloadConfig();
 
             EditorGUILayout.EndHorizontal();
         }
 
-        /// <summary>重新读取 JSON 并重置下拉框选择。</summary>
-        private void ReloadPresets()
+        /// <summary>重新读取配置文件并重置下拉框选择。</summary>
+        private void ReloadConfig()
         {
-            presetStore.Load();
+            configStore.Load();
+            memberFilter = new MemberFilter(inspector, configStore.ExcludedNamespacePrefixes);
+            pathResolver = new MemberPathResolver(configStore.ExcludedNamespacePrefixes);
             presetSelectedIndex = 0;
-            if (presetStore.HasPaths)
-                memberPath = presetStore.Paths[0];
+            if (configStore.HasPaths)
+                memberPath = configStore.Paths[0];
+            if (targetObject != null)
+                RefreshTree();
             GUI.FocusControl(null);
         }
 
@@ -203,7 +207,7 @@ namespace ObjectTreeViewerTool
                 targetObject = result.Value;
 
                 // 查询成功且路径不在预定义列表中，则记录为第一条并刷新下拉框
-                if (presetStore.AddPathIfAbsent(path))
+                if (configStore.AddPathIfAbsent(path))
                 {
                     presetSelectedIndex = 0;
                     Debug.Log($"已将路径添加到预定义列表: {path}");
@@ -211,7 +215,7 @@ namespace ObjectTreeViewerTool
                 else
                 {
                     // 已存在则同步下拉框选中项到该路径
-                    var idx = presetStore.Paths.IndexOf(path.Trim());
+                    var idx = configStore.Paths.IndexOf(path.Trim());
                     if (idx >= 0)
                         presetSelectedIndex = idx;
                 }

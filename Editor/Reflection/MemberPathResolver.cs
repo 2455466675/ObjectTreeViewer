@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 
 namespace ObjectTreeViewerTool
@@ -9,7 +10,12 @@ namespace ObjectTreeViewerTool
     /// </summary>
     internal sealed class MemberPathResolver
     {
-        /// <summary>解析结果，包含成功标志、对象与可读的错误信息。</summary>
+        private readonly IReadOnlyList<string> excludedNamespacePrefixes;
+
+        public MemberPathResolver(IReadOnlyList<string> excludedNamespacePrefixes)
+        {
+            this.excludedNamespacePrefixes = excludedNamespacePrefixes ?? Array.Empty<string>();
+        }        /// <summary>解析结果，包含成功标志、对象与可读的错误信息。</summary>
         public readonly struct ResolveResult
         {
             public bool Success { get; }
@@ -90,12 +96,14 @@ namespace ObjectTreeViewerTool
         private Type FindType(string typeName)
         {
             var type = Type.GetType(typeName);
-            if (type != null) return type;
+            if (type != null && !IsExcludedNamespace(type))
+                return type;
 
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
                 type = assembly.GetType(typeName);
-                if (type != null) return type;
+                if (type != null && !IsExcludedNamespace(type))
+                    return type;
 
                 // GetTypes 在部分程序集加载失败时会抛 ReflectionTypeLoadException，
                 // 此时回退到已成功加载的类型继续匹配，避免整个查找中断。
@@ -111,17 +119,15 @@ namespace ObjectTreeViewerTool
 
                 foreach (var t in types)
                 {
-                    if (t != null &&
-                        (t.Namespace == null || !t.Namespace.StartsWith("Demo")) &&
-                        t.Name == typeName)
-                    {
+                    if (t != null && t.Name == typeName && !IsExcludedNamespace(t))
                         return t;
-                    }
                 }
             }
             return null;
         }
 
+        private bool IsExcludedNamespace(Type type) =>
+            NamespaceExclusion.IsExcluded(type, excludedNamespacePrefixes);
         private FieldInfo GetStaticField(Type type, string name)
         {
             while (type != null)
