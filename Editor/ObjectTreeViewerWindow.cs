@@ -34,8 +34,21 @@ namespace ObjectTreeViewerTool
         // 预定义路径下拉框当前选中索引
         private int presetSelectedIndex;
 
-        // 历史根对象栈，用于 ⬅ 回退（保存进入当前树之前的各级根对象）
-        private readonly Stack<object> historyStack = new Stack<object>();
+        // 历史帧栈，用于 ⬅ 回退。除根对象外还保存树的展开/滚动状态与选定节点，
+        // 使回退后能恢复上一级“钻入前”的现场，而非重置为全新树。
+        private readonly Stack<HistoryEntry> historyStack = new Stack<HistoryEntry>();
+
+        /// <summary>
+        /// 一级回退现场：记录钻入某节点之前的根对象、树视图状态与当时选中的节点 Id。
+        /// 节点 Id 由 <see cref="ObjectTreeBuilder"/> 按确定的遍历顺序分配，对同一对象重建后保持稳定，
+        /// 因此可据此在回退重建后恢复选中项。
+        /// </summary>
+        private sealed class HistoryEntry
+        {
+            public object TargetObject;
+            public TreeViewState ViewState;
+            public int SelectedNodeId;
+        }
 
         // ——— IObjectTreeViewHost ———
         ObjectTreeNode IObjectTreeViewHost.RootNode => rootNode;
@@ -319,8 +332,16 @@ namespace ObjectTreeViewerTool
                 return;
             }
 
+            // 保存钻入前的现场：根对象、当前树状态与被钻入的节点（即回退后应恢复的选定目标）。
             if (targetObject != null)
-                historyStack.Push(targetObject);
+            {
+                historyStack.Push(new HistoryEntry
+                {
+                    TargetObject = targetObject,
+                    ViewState = treeViewState,
+                    SelectedNodeId = node.Id,
+                });
+            }
 
             targetObject = node.OriginalObject;
 
@@ -330,17 +351,21 @@ namespace ObjectTreeViewerTool
         }
 
         /// <summary>
-        /// 回退到上一个树：从历史栈取出上一级根对象并重建。回退不保留任何状态。
+        /// 回退到上一个树：取出上一级现场，恢复其根对象、展开/滚动状态与选定节点，
+        /// 让用户回到“钻入前”的样子而非全新树。
         /// </summary>
         private void GoBack()
         {
             if (historyStack.Count == 0)
                 return;
 
-            targetObject = historyStack.Pop();
+            var entry = historyStack.Pop();
+            targetObject = entry.TargetObject;
+            // 先还原保存的视图状态，再以“带选中节点”的方式重建，从而保留展开/滚动并选中原目标。
+            treeViewState = entry.ViewState ?? new TreeViewState();
 
             search.Clear();
-            RefreshTree();
+            RefreshTree(entry.SelectedNodeId);
             Repaint();
         }
     }
