@@ -10,14 +10,19 @@ using UTreeViewItem = UnityEditor.IMGUI.Controls.TreeViewItem;
 namespace ObjectTreeViewerTool
 {
     /// <summary>
-    /// 对象树的 IMGUI TreeView：负责构建 TreeViewItem、绘制行、双击/F2 编辑与二次展开。
-    /// 数据来源与搜索状态通过 <see cref="IObjectTreeViewHost"/> 提供，值写回交给 <see cref="ValueWriter"/>。
+    /// 对象树的 IMGUI TreeView：懒加载渲染。仅为“已构建”的数据节点生成 TreeViewItem；
+    /// 可展开但尚未构建的节点挂一个占位子项以显示展开箭头，用户展开时在
+    /// <see cref="ExpandedStateChanged"/> 中调用宿主增量构建该层后重建。
+    /// 数据来源通过 <see cref="IObjectTreeViewHost"/> 提供，值写回交给 <see cref="ValueWriter"/>。
     /// </summary>
     internal sealed class ObjectTreeView : UTreeView
     {
         private readonly IObjectTreeViewHost host;
         private readonly NodePresenter presenter;
         private readonly ValueWriter valueWriter;
+
+        // Id -> 数据节点映射，避免使用会遍历占位子项的 FindItem。
+        private readonly Dictionary<int, ObjectTreeNode> idToNode = new Dictionary<int, ObjectTreeNode>();
 
         private ObjectTreeViewItem editingItem;
         private bool isEditing;
@@ -35,17 +40,12 @@ namespace ObjectTreeViewerTool
 
         protected override UTreeViewItem BuildRoot()
         {
+            idToNode.Clear();
             var root = new UTreeViewItem { id = -1, depth = -1, displayName = "Root" };
 
             var rootNode = host.RootNode;
             if (rootNode != null)
-            {
-                var item = host.IsSearchActive
-                    ? BuildFilteredTreeItem(rootNode, 0)
-                    : BuildTreeItem(rootNode, 0);
-                if (item != null)
-                    root.AddChild(item);
-            }
+                root.AddChild(BuildTreeItem(rootNode, 0));
 
             SetupDepthsFromParentsAndChildren(root);
             return root;
@@ -54,43 +54,38 @@ namespace ObjectTreeViewerTool
         private ObjectTreeViewItem BuildTreeItem(ObjectTreeNode node, int depth)
         {
             var item = new ObjectTreeViewItem(node.Id, depth, presenter.GetDisplayName(node), node);
-            foreach (var child in node.Children)
+            idToNode[node.Id] = node;
+
+            if (node.ChildrenBuilt)
             {
-                var childItem = BuildTreeItem(child, depth + 1);
-                if (childItem != null)
-                    item.AddChild(childItem);
+                foreach (var child in node.Children)
+                    item.AddChild(BuildTreeItem(child, depth + 1));
             }
+            else if (node.CanExpand)
+            {
+                // 占位子项：仅用于显示展开箭头。使用负 Id 避免与真实节点（正 Id）冲突。
+                // 展开时会在 ExpandedStateChanged 中先构建真实子节点并 Reload，占位项不会真正渲染。
+                item.AddChild(new ObjectTreeViewItem(-node.Id - 2, depth + 1, "", null));
+            }
+
             return item;
         }
 
-        /// <summary>构建过滤后的树：仅保留命中节点及其祖先路径。</summary>
-        private ObjectTreeViewItem BuildFilteredTreeItem(ObjectTreeNode node, int depth)
+        /// <summary>用户展开/折叠状态变化时，为新展开且尚未构建的节点增量构建子节点。</summary>
+        protected override void ExpandedStateChanged()
         {
-            bool selfMatch = host.IsNodeMatchSearch(node);
-            List<ObjectTreeViewItem> matchedChildren = null;
-
-            foreach (var child in node.Children)
+            bool built = false;
+            foreach (var id in GetExpanded())
             {
-                var childItem = BuildFilteredTreeItem(child, depth + 1);
-                if (childItem != null)
+                if (idToNode.TryGetValue(id, out var node) && node.CanExpand && !node.ChildrenBuilt)
                 {
-                    matchedChildren ??= new List<ObjectTreeViewItem>();
-                    matchedChildren.Add(childItem);
+                    host.EnsureChildren(node);
+                    built = true;
                 }
             }
 
-            if (selfMatch || matchedChildren != null)
-            {
-                var item = new ObjectTreeViewItem(node.Id, depth, presenter.GetDisplayName(node), node);
-                if (matchedChildren != null)
-                {
-                    foreach (var child in matchedChildren)
-                        item.AddChild(child);
-                }
-                return item;
-            }
-
-            return null;
+            if (built)
+                Reload();
         }
 
         protected override void RowGUI(RowGUIArgs args)
@@ -102,19 +97,10 @@ namespace ObjectTreeViewerTool
                 return;
             }
 
-            var rect = args.rowRect;
-            var labelRect = rect;
-            labelRect.x += GetContentIndent(args.item);
-            labelRect.width -= GetContentIndent(args.item);
-
-            // 搜索匹配时绘制高亮背景
-            if (host.IsSearchActive && host.IsNodeMatchSearch(item.Node))
-            {
-                var highlightColor = host.IsCurrentSearchResult(item.Node.Id)
-                    ? new Color(1f, 0.6f, 0f, 0.3f)   // 当前选中结果：橙色
-                    : new Color(1f, 1f, 0f, 0.15f);   // 其他匹配结果：淡黄色
-                EditorGUI.DrawRect(rect, highlightColor);
-            }
+            var labelRect = args.rowRect;
+            var indent = GetContentIndent(args.item);
+            labelRect.x += indent;
+            labelRect.width -= indent;
 
             GUI.Label(labelRect, args.label, presenter.GetLabelStyle(item.Node));
         }
@@ -122,53 +108,27 @@ namespace ObjectTreeViewerTool
         protected override void KeyEvent()
         {
             var evt = Event.current;
-            if (evt.type == EventType.KeyDown)
+            if (evt.type == EventType.KeyDown && evt.keyCode == KeyCode.F2 && HasSelection())
             {
-                // C 键：回退到上一个树（无需选中节点）
-                if (evt.keyCode == KeyCode.C)
-                {
-                    host.GoBack();
-                    evt.Use();
-                    return;
-                }
-
-                if (HasSelection())
-                {
-                    var selectedIds = GetSelection();
-                    if (selectedIds != null && selectedIds.Count > 0)
-                    {
-                        var id = selectedIds[0];
-
-                        if (evt.keyCode == KeyCode.F2)
-                        {
-                            HandleActivate(id);
-                        }
-                        else if (evt.keyCode == KeyCode.RightArrow)
-                        {
-                            // 右箭头：若选中的是二次展开占位节点，则触发展开
-                            var item = FindItem(id, rootItem) as ObjectTreeViewItem;
-                            if (item?.Node != null && item.Node.IsDrillInPoint)
-                            {
-                                host.DrillInto(item.Node);
-                                evt.Use();
-                                return;
-                            }
-                        }
-                    }
-                }
+                var selectedIds = GetSelection();
+                if (selectedIds != null && selectedIds.Count > 0)
+                    HandleActivate(selectedIds[0]);
             }
             base.KeyEvent();
         }
 
         protected override void DoubleClickedItem(int id)
         {
-            // 优先处理二次展开占位节点
-            var clickedItem = FindItem(id, rootItem) as ObjectTreeViewItem;
-            if (clickedItem?.Node != null && clickedItem.Node.IsDrillInPoint)
+            if (!idToNode.TryGetValue(id, out var node))
+                return;
+
+            // 可展开节点：双击切换展开状态（子节点按需构建）
+            if (node.CanExpand)
             {
-                host.DrillInto(clickedItem.Node);
+                SetExpanded(id, !IsExpanded(id));
                 return;
             }
+
             HandleActivate(id);
         }
 
@@ -186,22 +146,35 @@ namespace ObjectTreeViewerTool
         /// <summary>处理回车/双击的激活：bool 直接切换，其它进入重命名编辑。</summary>
         private void HandleActivate(int id)
         {
-            var item = FindItem(id, rootItem) as ObjectTreeViewItem;
+            var item = GetItemById(id);
             if (item?.Node == null)
                 return;
 
-            if (item.Node.Type == "bool" && CanEditValue(item.Node))
+            var node = item.Node;
+
+            if (node.Type == "bool" && CanEditValue(node))
             {
                 ToggleBoolValue(item);
                 Event.current.Use();
                 return;
             }
 
-            if (CanEditValue(item.Node))
+            if (CanEditValue(node))
             {
                 StartEditing(item);
                 Event.current.Use();
             }
+        }
+
+        /// <summary>在当前行集合中按 Id 查找对应的 ObjectTreeViewItem（不遍历占位项）。</summary>
+        private ObjectTreeViewItem GetItemById(int id)
+        {
+            foreach (var row in GetRows())
+            {
+                if (row.id == id && row is ObjectTreeViewItem item && item.Node != null)
+                    return item;
+            }
+            return null;
         }
 
         /// <summary>判断节点的值是否可编辑。</summary>
@@ -209,7 +182,7 @@ namespace ObjectTreeViewerTool
         {
             if (node == null) return false;
             if (node.IsClass) return false;
-            if (node.Children.Count > 0) return false;
+            if (node.CanExpand) return false;
             if (node.Value == "null" || node.Value == "循环引用") return false;
             // 结构体字段不可编辑（修改 struct 字段需写回整个 struct，实现复杂）
             if (IsStructField(node)) return false;
@@ -245,7 +218,7 @@ namespace ObjectTreeViewerTool
             if (editingItem == null || !isEditing)
                 return;
 
-            int editedNodeId = editingItem.Node.Id;
+            var editedNode = editingItem.Node;
 
             if (args.acceptedRename && args.newName != null && args.newName != args.originalName)
             {
@@ -258,8 +231,10 @@ namespace ObjectTreeViewerTool
             editingItem = null;
             isEditing = false;
 
-            // 重建后保持选中刚编辑的节点
-            host.RefreshTree(editedNodeId);
+            // 就地刷新该节点的显示值并重建行，保留当前展开状态
+            host.RefreshNodeValue(editedNode);
+            Reload();
+            SelectAndFocus(editedNode.Id);
         }
 
         private void ToggleBoolValue(ObjectTreeViewItem item)
@@ -278,8 +253,10 @@ namespace ObjectTreeViewerTool
 
             item.EditValue = newValue.ToString();
             ApplyValueChange(item);
-            // 重建后保持选中刚切换的节点
-            host.RefreshTree(item.Node.Id);
+
+            host.RefreshNodeValue(item.Node);
+            Reload();
+            SelectAndFocus(item.Node.Id);
         }
 
         private void ApplyValueChange(ObjectTreeViewItem item)
@@ -296,6 +273,15 @@ namespace ObjectTreeViewerTool
         {
             SetSelection(new List<int> { nodeId }, TreeViewSelectionOptions.RevealAndFrame);
             SetFocusAndEnsureSelectedItem();
+        }
+
+        /// <summary>展开根节点并选中指定节点（默认根节点），用于初始与刷新后的定位。</summary>
+        public void ExpandRootAndSelect(int nodeId)
+        {
+            var rootNode = host.RootNode;
+            if (rootNode != null)
+                SetExpanded(rootNode.Id, true);
+            SelectAndFocus(nodeId);
         }
     }
 }

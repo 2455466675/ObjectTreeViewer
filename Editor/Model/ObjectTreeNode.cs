@@ -5,6 +5,7 @@ namespace ObjectTreeViewerTool
 {
     /// <summary>
     /// 对象树的数据节点，纯数据模型，不包含任何 UI 或反射逻辑。
+    /// 采用懒加载：子节点仅在被展开时才由 <see cref="ObjectTreeBuilder"/> 构建。
     /// </summary>
     internal sealed class ObjectTreeNode
     {
@@ -26,7 +27,7 @@ namespace ObjectTreeViewerTool
         /// <summary>C# 风格类型名。</summary>
         public string Type { get; set; }
 
-        /// <summary>节点承载的真实对象，编辑与二次展开时使用。</summary>
+        /// <summary>节点承载的真实对象，编辑与展开时使用。</summary>
         public object OriginalObject { get; set; }
 
         /// <summary>来源字段（若该节点由字段产生）。</summary>
@@ -44,8 +45,14 @@ namespace ObjectTreeViewerTool
         /// <summary>节点在树中的深度（根节点为 0）。</summary>
         public int Depth { get; set; }
 
-        /// <summary>是否为"可二次展开"的占位节点（因超过最大深度而未继续展开）。</summary>
-        public bool IsDrillInPoint { get; set; }
+        /// <summary>
+        /// 节点是否可继续展开（复合且含可展开内容）。
+        /// 由构建时依据值的类型廉价判定，用于决定是否显示展开箭头，无需真正构建子节点。
+        /// </summary>
+        public bool CanExpand { get; set; }
+
+        /// <summary>子节点是否已构建。懒加载下仅在首次展开时置为 true。</summary>
+        public bool ChildrenBuilt { get; set; }
 
         /// <summary>子节点列表。</summary>
         public List<ObjectTreeNode> Children { get; }

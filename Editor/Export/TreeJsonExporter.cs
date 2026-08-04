@@ -4,8 +4,7 @@ namespace ObjectTreeViewerTool
 {
     /// <summary>
     /// 将已构建的 <see cref="ObjectTreeNode"/> 树序列化为 JSON 文本。
-    /// 直接以树的当前形态输出：超过展开深度的复合节点（IsDrillInPoint）只有摘要、无子节点，
-    /// 因此自然只记录简要数据，不会深入展开。
+    /// 可展开但未构建子节点的复合节点标注 truncated，只记录摘要，不深入展开。
     /// </summary>
     internal sealed class TreeJsonExporter
     {
@@ -35,8 +34,8 @@ namespace ObjectTreeViewerTool
             sb.Append(fieldIndent).Append("\"value\": ").Append(Quote(node.Value)).Append(",\n");
             sb.Append(fieldIndent).Append("\"isComposite\": ").Append(node.IsClass ? "true" : "false");
 
-            // 超过展开深度的占位节点：标注 truncated 但不输出子节点
-            if (node.IsDrillInPoint)
+            // 可展开但未构建子节点（达到节点上限等）：标注 truncated 但不输出子节点
+            if (node.CanExpand && !node.ChildrenBuilt)
             {
                 sb.Append(",\n");
                 sb.Append(fieldIndent).Append("\"truncated\": true\n");

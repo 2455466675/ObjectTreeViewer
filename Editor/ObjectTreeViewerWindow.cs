@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+using System.Collections;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
@@ -8,7 +8,8 @@ namespace ObjectTreeViewerTool
 {
     /// <summary>
     /// 对象树查看器主窗口：作为各模块的组合根（composition root），负责装配依赖、
-    /// 绘制工具栏、协调取对象 / 刷新 / 二次展开 / 回退等流程。
+    /// 绘制工具栏、协调取对象 / 刷新 / 懒加载展开等流程。
+    /// 树采用懒加载：初始仅展开一层，用户展开某节点时再增量构建其子节点。
     /// 除菜单入口外不使用静态成员。
     /// </summary>
     public sealed class ObjectTreeViewerWindow : EditorWindow, IObjectTreeViewHost
@@ -20,13 +21,13 @@ namespace ObjectTreeViewerTool
         private ObjectTreeBuilder.Options buildOptions;
         private NodePresenter presenter;
         private ValueWriter valueWriter;
-        private TreeSearchController search;
         private ViewerConfigStore configStore;
         private TreeJsonExporter exporter;
 
         // ——— 运行状态 ———
         private object targetObject;
         private ObjectTreeNode rootNode;
+        private ObjectTreeBuilder builder;   // 服务于当前树的懒加载构建器
         private ObjectTreeView treeView;
         private TreeViewState treeViewState;
 
@@ -34,30 +35,10 @@ namespace ObjectTreeViewerTool
         // 预定义路径下拉框当前选中索引
         private int presetSelectedIndex;
 
-        // 历史帧栈，用于 ⬅ 回退。除根对象外还保存树的展开/滚动状态与选定节点，
-        // 使回退后能恢复上一级“钻入前”的现场，而非重置为全新树。
-        private readonly Stack<HistoryEntry> historyStack = new Stack<HistoryEntry>();
-
-        /// <summary>
-        /// 一级回退现场：记录钻入某节点之前的根对象、树视图状态与当时选中的节点 Id。
-        /// 节点 Id 由 <see cref="ObjectTreeBuilder"/> 按确定的遍历顺序分配，对同一对象重建后保持稳定，
-        /// 因此可据此在回退重建后恢复选中项。
-        /// </summary>
-        private sealed class HistoryEntry
-        {
-            public object TargetObject;
-            public TreeViewState ViewState;
-            public int SelectedNodeId;
-        }
-
         // ——— IObjectTreeViewHost ———
         ObjectTreeNode IObjectTreeViewHost.RootNode => rootNode;
-        bool IObjectTreeViewHost.IsSearchActive => search != null && search.IsActive;
-        bool IObjectTreeViewHost.IsNodeMatchSearch(ObjectTreeNode node) => search != null && search.IsNodeMatch(node);
-        bool IObjectTreeViewHost.IsCurrentSearchResult(int nodeId) => search != null && search.IsCurrentResult(nodeId);
-        void IObjectTreeViewHost.DrillInto(ObjectTreeNode node) => DrillInto(node);
-        void IObjectTreeViewHost.GoBack() => GoBack();
-        void IObjectTreeViewHost.RefreshTree(int? selectNodeId) => RefreshTree(selectNodeId);
+        void IObjectTreeViewHost.EnsureChildren(ObjectTreeNode node) => builder?.EnsureChildren(node);
+        void IObjectTreeViewHost.RefreshNodeValue(ObjectTreeNode node) => RefreshNodeValue(node);
 
         [MenuItem("Window/对象树查看器")]
         public static void ShowWindow()
@@ -73,12 +54,12 @@ namespace ObjectTreeViewerTool
             configStore = new ViewerConfigStore();
             memberFilter = new MemberFilter(inspector, configStore.ExcludedNamespacePrefixes);
             pathResolver = new MemberPathResolver(configStore.ExcludedNamespacePrefixes);
-            buildOptions = new ObjectTreeBuilder.Options { MaxDepth = 5, MaxNodeCount = 20000 };
+            buildOptions = new ObjectTreeBuilder.Options { MaxNodeCount = 20000, MaxChildrenPerNode = 5000 };
             presenter = new NodePresenter();
             valueWriter = new ValueWriter(new ValueConverter());
-            search = new TreeSearchController(() => rootNode, () => treeView, Repaint);
+            exporter = new TreeJsonExporter();
 
-            exporter = new TreeJsonExporter();            // 若存在预定义路径，默认显示并填充第一条
+            // 若存在预定义路径，默认显示并填充第一条
             if (configStore.HasPaths)
             {
                 presetSelectedIndex = 0;
@@ -103,12 +84,6 @@ namespace ObjectTreeViewerTool
 
             EditorGUILayout.BeginHorizontal();
 
-            // ⬅ 回退按钮：仅在有历史记录时可用
-            EditorGUI.BeginDisabledGroup(historyStack.Count == 0);
-            if (GUILayout.Button($"⬅ 返回 ({historyStack.Count})", GUILayout.Height(25), GUILayout.Width(120)))
-                GoBack();
-            EditorGUI.EndDisabledGroup();
-
             if (GUILayout.Button("获取对象", GUILayout.Height(25)))
                 GetObjectByPath(memberPath);
 
@@ -126,19 +101,12 @@ namespace ObjectTreeViewerTool
             EditorGUILayout.HelpBox(
                 "示例:\n" +
                 "• GameData.I.GrowthScoreData\n\n" +
-                "按 F2 编辑 | 搜索框支持 Enter 下一个 / Shift+Enter 上一个 / Esc 清除\n" +
-                $"树最大深度为 {buildOptions.MaxDepth} 层，超出的复合节点显示 ▶，双击或选中后按 → 可二次展开为新树，⬅ 或按 C 返回上一级\n",
+                "点击箭头或双击复合节点可展开（按需构建子节点）| 按 F2 编辑叶子值\n",
                 MessageType.Info);
 
             EditorGUILayout.EndVertical();
 
             EditorGUILayout.Space(5);
-
-            if (treeView != null)
-            {
-                search.DrawSearchBar();
-                EditorGUILayout.Space(3);
-            }
         }
 
         /// <summary>
@@ -233,8 +201,6 @@ namespace ObjectTreeViewerTool
                         presetSelectedIndex = idx;
                 }
 
-                // 通过路径获取新对象视为全新起点，清空回退历史
-                historyStack.Clear();
                 RefreshTree();
             }
             else
@@ -246,14 +212,14 @@ namespace ObjectTreeViewerTool
         }
 
         /// <summary>
-        /// 导出当前树为 JSON：弹出文件夹选择窗口，文件名为根节点名称。
-        /// 超过展开深度的复合节点只记录摘要（truncated），不深入展开。
+        /// 导出当前对象树为 JSON：弹出文件夹选择窗口，文件名为根节点名称。
+        /// 导出使用独立构建器做完整（深度）构建，不影响 UI 的懒加载树；受节点上限与循环引用保护。
         /// </summary>
         private void ExportTree()
         {
-            if (rootNode == null)
+            if (targetObject == null)
             {
-                Debug.LogWarning("没有可导出的树，请先获取对象");
+                Debug.LogWarning("没有可导出的对象，请先获取对象");
                 return;
             }
 
@@ -263,8 +229,12 @@ namespace ObjectTreeViewerTool
 
             try
             {
-                var json = exporter.ToJson(rootNode);
-                var fileName = SanitizeFileName(rootNode.Name) + ".json";
+                var exportBuilder = new ObjectTreeBuilder(inspector, memberFilter, buildOptions);
+                var exportRoot = exportBuilder.BuildRoot(targetObject);
+                exportBuilder.BuildFullTree(exportRoot);
+
+                var json = exporter.ToJson(exportRoot);
+                var fileName = SanitizeFileName(exportRoot.Name) + ".json";
                 var fullPath = System.IO.Path.Combine(folder, fileName);
                 System.IO.File.WriteAllText(fullPath, json);
 
@@ -288,9 +258,8 @@ namespace ObjectTreeViewerTool
             return name;
         }
 
-        /// <summary>根据当前 <see cref="targetObject"/> 重建数据树与视图。</summary>
-        /// <param name="selectNodeId">重建后应选中的节点 Id；为 null 时选中根节点。</param>
-        internal void RefreshTree(int? selectNodeId = null)
+        /// <summary>根据当前 <see cref="targetObject"/> 重建根节点与视图（懒加载，仅构建第一层）。</summary>
+        private void RefreshTree()
         {
             if (targetObject == null)
             {
@@ -298,75 +267,52 @@ namespace ObjectTreeViewerTool
                 return;
             }
 
-            var builder = new ObjectTreeBuilder(inspector, memberFilter, buildOptions);
-            rootNode = builder.Build(targetObject);
+            builder = new ObjectTreeBuilder(inspector, memberFilter, buildOptions);
+            rootNode = builder.BuildRoot(targetObject);
 
-            // 全新的树（获取对象/二次展开/回退，selectNodeId 为 null）使用全新状态，
-            // 避免旧树按节点 Id 残留的展开/滚动位置串到新树；
-            // 编辑刷新（带 selectNodeId）则保留状态以维持用户当前展开与滚动。
-            if (selectNodeId == null || treeViewState == null)
-                treeViewState = new TreeViewState();
+            // 每次重建都视为全新树，使用全新视图状态，避免旧树的展开/滚动位置串到新树
+            treeViewState = new TreeViewState();
             treeView = new ObjectTreeView(treeViewState, this, presenter, valueWriter);
+            treeView.Reload();
 
-            if (search.IsActive)
-                search.RecomputeAfterRefresh();
-            else
-            {
-                treeView.Reload();
-                // 默认选中指定节点（如编辑过的节点），否则选中根节点并聚焦，便于方向键导航
-                var targetId = selectNodeId ?? rootNode?.Id;
-                if (targetId.HasValue)
-                    treeView.SelectAndFocus(targetId.Value);
-            }
+            if (rootNode != null)
+                treeView.ExpandRootAndSelect(rootNode.Id);
         }
 
         /// <summary>
-        /// 二次展开：将占位节点的对象作为新的根，清空当前树并重建。
-        /// 当前根对象压入历史栈以支持 ⬅ 回退。
+        /// 叶子节点的值被编辑后，就地重新读取该节点的显示值（不重建整棵树），以保留当前展开状态。
         /// </summary>
-        internal void DrillInto(ObjectTreeNode node)
+        private void RefreshNodeValue(ObjectTreeNode node)
         {
-            if (node?.OriginalObject == null)
-            {
-                Debug.LogWarning("该节点没有可展开的对象");
+            var parent = node?.Parent?.OriginalObject;
+            if (parent == null)
                 return;
-            }
 
-            // 保存钻入前的现场：根对象、当前树状态与被钻入的节点（即回退后应恢复的选定目标）。
-            if (targetObject != null)
+            try
             {
-                historyStack.Push(new HistoryEntry
+                object value = null;
+                if (node.SourceField != null)
                 {
-                    TargetObject = targetObject,
-                    ViewState = treeViewState,
-                    SelectedNodeId = node.Id,
-                });
+                    value = node.SourceField.GetValue(parent);
+                }
+                else if (node.SourceProperty != null && node.SourceProperty.CanRead)
+                {
+                    value = node.SourceProperty.GetValue(parent);
+                }
+                else if (node.IsContainerEntry)
+                {
+                    if (parent is IList list && node.ContainerKey is int index && index >= 0 && index < list.Count)
+                        value = list[index];
+                    else if (parent is IDictionary dict && node.ContainerKey != null)
+                        value = dict[node.ContainerKey];
+                }
+
+                node.Value = value?.ToString() ?? "null";
             }
-
-            targetObject = node.OriginalObject;
-
-            search.Clear();
-            RefreshTree();
-            Repaint();
-        }
-
-        /// <summary>
-        /// 回退到上一个树：取出上一级现场，恢复其根对象、展开/滚动状态与选定节点，
-        /// 让用户回到“钻入前”的样子而非全新树。
-        /// </summary>
-        private void GoBack()
-        {
-            if (historyStack.Count == 0)
-                return;
-
-            var entry = historyStack.Pop();
-            targetObject = entry.TargetObject;
-            // 先还原保存的视图状态，再以“带选中节点”的方式重建，从而保留展开/滚动并选中原目标。
-            treeViewState = entry.ViewState ?? new TreeViewState();
-
-            search.Clear();
-            RefreshTree(entry.SelectedNodeId);
-            Repaint();
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"刷新节点值失败: {ex.Message}");
+            }
         }
     }
 }

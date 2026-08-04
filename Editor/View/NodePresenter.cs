@@ -9,7 +9,6 @@ namespace ObjectTreeViewerTool
     /// </summary>
     internal sealed class NodePresenter
     {
-        private static readonly Color ColorDrillIn = new Color(1f, 0.85f, 0.4f);
         private static readonly Color ColorNull = Color.gray;
         private static readonly Color ColorNumber = new Color(0.6f, 0.8f, 1f);
         private static readonly Color ColorString = new Color(1f, 0.8f, 0.6f);
@@ -17,7 +16,6 @@ namespace ObjectTreeViewerTool
         private static readonly Color ColorClass = new Color(0.8f, 1f, 0.8f);
 
         // 缓存的样式实例（懒初始化，避免在静态构造里访问 EditorStyles）
-        private GUIStyle styleDrillIn;
         private GUIStyle styleNull;
         private GUIStyle styleNumber;
         private GUIStyle styleString;
@@ -30,9 +28,6 @@ namespace ObjectTreeViewerTool
         {
             if (node == null) return "null";
 
-            if (node.IsDrillInPoint)
-                return $"{node.Name}: {node.Value} ({node.Type})  ▶ 双击展开";
-
             if (node.IsClass || node.Value == "null")
                 return $"{node.Name}: {node.Value} ({node.Type})";
 
@@ -42,7 +37,6 @@ namespace ObjectTreeViewerTool
         /// <summary>根据节点类型返回缓存的标签样式。</summary>
         public GUIStyle GetLabelStyle(ObjectTreeNode node)
         {
-            if (node.IsDrillInPoint) return styleDrillIn ??= MakeStyle(ColorDrillIn);
             if (node.Value == "null") return styleNull ??= MakeStyle(ColorNull);
 
             switch (node.Type)
