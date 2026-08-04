@@ -1,15 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace ObjectTreeViewerTool
 {
     /// <summary>
-    /// 读取同目录下 <c>ViewerConfig.json</c> 中的用户配置：
+    /// 读取工程 <c>UserSettings/</c> 目录下 <c>ViewerConfig.json</c> 中的用户配置：
     /// 预定义查询路径、排除的命名空间前缀等。
-    /// 通过 <see cref="CallerFilePathAttribute"/> 定位脚本所在目录，从而稳定找到 JSON。
+    /// 配置存于 UserSettings（工程内、按用户私有、默认不纳入版本库），
+    /// 因此无论本工具以源码、asmdef 包还是预编译 DLL 形态使用，都能稳定读写且不干扰团队。
     /// </summary>
     internal sealed class ViewerConfigStore
     {
@@ -21,7 +21,8 @@ namespace ObjectTreeViewerTool
         }
 
         private const string JsonFileName = "ViewerConfig.json";
-        private const string LegacyJsonFileName = "QueryPathPresets.json";
+        // UserSettings 是 Unity 约定的“工程内、用户私有、默认不入版本库”目录
+        private const string UserSettingsFolderName = "UserSettings";
 
         // 预定义路径记录上限，超出时移除最旧的一条（列表末尾），避免文件无限增长
         private const int MaxPathCount = 100;
@@ -69,13 +70,12 @@ namespace ObjectTreeViewerTool
             userExcludedNamespacePrefixes = new List<string>();
             ExcludedNamespacePrefixes = MergeExcludedNamespacePrefixes(userExcludedNamespacePrefixes);
 
-            var readPath = ResolveReadPath();
-            if (string.IsNullOrEmpty(readPath) || !File.Exists(readPath))
+            if (string.IsNullOrEmpty(JsonFilePath) || !File.Exists(JsonFilePath))
                 return;
 
             try
             {
-                var text = File.ReadAllText(readPath);
+                var text = File.ReadAllText(JsonFilePath);
                 if (string.IsNullOrWhiteSpace(text))
                     return;
 
@@ -127,11 +127,14 @@ namespace ObjectTreeViewerTool
         /// <summary>将当前配置写回 JSON 文件。</summary>
         private void Save()
         {
-            if (string.IsNullOrEmpty(JsonFilePath))
+            if (string.IsNullOrEmpty(JsonFilePath) || string.IsNullOrEmpty(configDirectory))
                 return;
 
             try
             {
+                // UserSettings 目录可能尚未创建，写入前确保存在
+                Directory.CreateDirectory(configDirectory);
+
                 var data = new ConfigData
                 {
                     paths = new List<string>(Paths),
@@ -144,22 +147,6 @@ namespace ObjectTreeViewerTool
             {
                 Debug.LogError($"写入配置文件失败: {ex.Message}");
             }
-        }
-
-        private string ResolveReadPath()
-        {
-            if (string.IsNullOrEmpty(configDirectory))
-                return null;
-
-            var primary = Path.Combine(configDirectory, JsonFileName);
-            if (File.Exists(primary))
-                return primary;
-
-            var legacy = Path.Combine(configDirectory, LegacyJsonFileName);
-            if (File.Exists(legacy))
-                return legacy;
-
-            return primary;
         }
 
         private static List<string> ParseUserExcludedNamespacePrefixes(List<string> raw)
@@ -211,13 +198,17 @@ namespace ObjectTreeViewerTool
             return false;
         }
 
-        /// <summary>通过编译期记录的脚本路径推导配置目录。</summary>
-        private static string ResolveConfigDirectory([CallerFilePath] string callerFilePath = "")
+        /// <summary>
+        /// 定位工程的 <c>UserSettings</c> 目录（<c>Application.dataPath</c> 上一级即工程根）。
+        /// 该目录与程序集形态无关且可写，是用户私有、默认不入版本库的配置存放处。
+        /// </summary>
+        private static string ResolveConfigDirectory()
         {
-            if (string.IsNullOrEmpty(callerFilePath))
+            var projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
+            if (string.IsNullOrEmpty(projectRoot))
                 return null;
 
-            return Path.GetDirectoryName(callerFilePath);
+            return Path.Combine(projectRoot, UserSettingsFolderName);
         }
     }
 }

@@ -10,9 +10,13 @@
 - 移除深度上限（`MaxDepth`），改用单节点子项上限（`MaxChildrenPerNode`，默认 5000）与整树节点上限（`MaxNodeCount`）作为安全阀。
 - 导出改为使用独立构建器做完整（深度）构建，不影响 UI 的懒加载树。
 
+- 配置文件从包内 `Editor/ViewerConfig.json` 迁移至工程 `UserSettings/ViewerConfig.json`（用户私有、默认不入版本库），改用 `Application.dataPath` 定位而非 `[CallerFilePath]`，使其在预编译 DLL / 只读 PackageCache 等形态下也能正常读写。
+
 ### Removed
 - 移除树搜索功能（与懒加载互斥）。
 - 移除二次展开（换根）与 ⬅ / C 返回上一级功能。
+- 移除包内出厂 `ViewerConfig.json`（配置改由 UserSettings 按需生成）。
+- 移除旧版 `QueryPathPresets.json` 兼容读取。
 
 ## [1.1.0]
 
