@@ -79,7 +79,7 @@ namespace ObjectTreeViewerTool
 
             DrawPresetDropdown();
 
-            EditorGUILayout.LabelField("成员路径 (格式: 类型名.成员):", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("成员路径 (类型名.成员 / 命名空间::类型名.成员):", EditorStyles.boldLabel);
             memberPath = EditorGUILayout.TextField(memberPath);
 
             EditorGUILayout.BeginHorizontal();
@@ -100,7 +100,8 @@ namespace ObjectTreeViewerTool
 
             EditorGUILayout.HelpBox(
                 "示例:\n" +
-                "• GameData.I.GrowthScoreData\n\n" +
+                "• GameData.I.GrowthScoreData\n" +
+                "• MyGame.Data::GameData.I.GiftData（存在同名类型时）\n\n" +
                 "点击箭头或双击复合节点可展开（按需构建子节点）| 按 F2 编辑叶子值\n",
                 MessageType.Info);
 
