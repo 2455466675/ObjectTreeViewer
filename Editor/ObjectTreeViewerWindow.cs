@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
@@ -259,7 +260,10 @@ namespace ObjectTreeViewerTool
             return name;
         }
 
-        /// <summary>根据当前 <see cref="targetObject"/> 重建根节点与视图（懒加载，仅构建第一层）。</summary>
+        /// <summary>
+        /// 根据当前 <see cref="targetObject"/> 重建根节点与视图（懒加载，仅构建第一层）。
+        /// 刷新时按稳定路径保留原有的展开与选中状态（按位置匹配，原位置不存在则跳过）。
+        /// </summary>
         private void RefreshTree()
         {
             if (targetObject == null)
@@ -268,16 +272,92 @@ namespace ObjectTreeViewerTool
                 return;
             }
 
+            // 重建前采集旧树的展开/选中状态（基于稳定路径，与节点 Id、构建顺序无关），
+            // 以及当前滚动位置，用于刷新后原地保留视图（不自动滚到选中项）
+            List<string> expandedPaths = treeView?.GetExpandedPaths();
+            string selectedPath = treeView?.GetSelectedPath();
+            Vector2 savedScroll = treeViewState?.scrollPos ?? Vector2.zero;
+
             builder = new ObjectTreeBuilder(inspector, memberFilter, buildOptions);
             rootNode = builder.BuildRoot(targetObject);
 
-            // 每次重建都视为全新树，使用全新视图状态，避免旧树的展开/滚动位置串到新树
+            // 使用全新视图状态，随后按路径恢复展开状态，避免旧 Id/滚动位置串到新树
             treeViewState = new TreeViewState();
             treeView = new ObjectTreeView(treeViewState, this, presenter, valueWriter);
+
+            if (rootNode == null)
+                return;
+
+            if (expandedPaths != null && expandedPaths.Count > 0)
+                RestoreExpansion(expandedPaths, selectedPath, savedScroll);
+            else
+                treeView.ExpandRootAndSelect(rootNode.Id);
+        }
+
+        /// <summary>
+        /// 按稳定路径恢复展开状态：自顶向下遍历新树，仅对原先展开的节点做增量构建（保持懒加载），
+        /// 收集其新 Id 后统一写回视图状态并 Reload。原位置已不存在的节点会自动跳过。
+        /// </summary>
+        private void RestoreExpansion(List<string> expandedPaths, string selectedPath, Vector2 savedScroll)
+        {
+            var expandedSet = new HashSet<string>(expandedPaths);
+            var idsToExpand = new List<int>();
+
+            // 局部递归：只有当前节点原先处于展开状态时，才构建其子层并继续深入
+            void Walk(ObjectTreeNode node)
+            {
+                if (node == null || !expandedSet.Contains(node.StablePath))
+                    return;
+
+                builder.EnsureChildren(node);
+                idsToExpand.Add(node.Id);
+                foreach (var child in node.Children)
+                    Walk(child);
+            }
+
+            Walk(rootNode);
+
+            // 保证根节点始终展开（即便旧状态异常缺失）
+            if (!idsToExpand.Contains(rootNode.Id))
+            {
+                builder.EnsureChildren(rootNode);
+                idsToExpand.Add(rootNode.Id);
+            }
+
+            idsToExpand.Sort();
+            treeViewState.expandedIDs = idsToExpand;
             treeView.Reload();
 
-            if (rootNode != null)
-                treeView.ExpandRootAndSelect(rootNode.Id);
+            // 恢复选中（不强制定位），原选中位置不存在时回退到根节点
+            int selectedId = FindNodeIdByPath(selectedPath) ?? rootNode.Id;
+            treeView.SelectWithoutFraming(selectedId);
+
+            // 最后写回滚动位置，保持刷新前的视图位置不变
+            treeViewState.scrollPos = savedScroll;
+        }
+
+        /// <summary>在当前已构建的数据树中按稳定路径查找节点 Id，找不到返回 null。</summary>
+        private int? FindNodeIdByPath(string path)
+        {
+            if (string.IsNullOrEmpty(path) || rootNode == null)
+                return null;
+
+            ObjectTreeNode Search(ObjectTreeNode node)
+            {
+                if (node == null)
+                    return null;
+                if (node.StablePath == path)
+                    return node;
+                foreach (var child in node.Children)
+                {
+                    var found = Search(child);
+                    if (found != null)
+                        return found;
+                }
+                return null;
+            }
+
+            return Search(rootNode)?.Id;
         }
 
         /// <summary>

@@ -57,6 +57,25 @@ namespace ObjectTreeViewerTool
         /// <summary>子节点列表。</summary>
         public List<ObjectTreeNode> Children { get; }
 
+        private string cachedStablePath;
+
+        /// <summary>
+        /// 与构建顺序、节点 Id 无关的稳定路径标识，由父路径与本节点名称拼接而成。
+        /// 用于“刷新数据时按位置保留展开/选中状态”：同一逻辑位置在刷新前后路径一致。
+        /// 列表元素使用位置索引（如 [0]），因此中间插入/删除会造成位置语义偏移（按需求接受该行为）。
+        /// </summary>
+        public string StablePath
+        {
+            get
+            {
+                // 名称在节点创建后不再改变（编辑仅改 Value），故可安全缓存。
+                // 使用不可见控制符作分隔，避免与名称中的字符冲突。
+                if (cachedStablePath == null)
+                    cachedStablePath = Parent == null ? Name : Parent.StablePath + "\u0001" + Name;
+                return cachedStablePath;
+            }
+        }
+
         public ObjectTreeNode(ObjectTreeNode parent, int id, bool isClass, string name, string value, string typeName)
         {
             Children = new List<ObjectTreeNode>();

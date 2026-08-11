@@ -275,6 +275,37 @@ namespace ObjectTreeViewerTool
             SetFocusAndEnsureSelectedItem();
         }
 
+        /// <summary>
+        /// 仅设置选中项，不做任何滚动/定位，也不强制可见。
+        /// 用于刷新时恢复选中而保留原有滚动位置（避免自动滚到选中项）。
+        /// </summary>
+        public void SelectWithoutFraming(int nodeId)
+        {
+            SetSelection(new List<int> { nodeId });
+        }
+
+        /// <summary>采集当前所有已展开节点的稳定路径，用于刷新后按位置恢复展开状态。</summary>
+        public List<string> GetExpandedPaths()
+        {
+            var paths = new List<string>();
+            foreach (var id in GetExpanded())
+            {
+                if (idToNode.TryGetValue(id, out var node))
+                    paths.Add(node.StablePath);
+            }
+            return paths;
+        }
+
+        /// <summary>获取当前选中节点的稳定路径；无选中或无法映射时返回 null。</summary>
+        public string GetSelectedPath()
+        {
+            var selection = GetSelection();
+            if (selection != null && selection.Count > 0 &&
+                idToNode.TryGetValue(selection[0], out var node))
+                return node.StablePath;
+            return null;
+        }
+
         /// <summary>展开根节点并选中指定节点（默认根节点），用于初始与刷新后的定位。</summary>
         public void ExpandRootAndSelect(int nodeId)
         {

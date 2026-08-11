@@ -1,6 +1,6 @@
 {
   "name": "com.qingzheng.object-tree-viewer",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "displayName": "Object Tree Viewer",
   "description": "Editor 下通过反射查看、编辑与导出运行时对象树的调试工具。支持路径查询、预定义路径与懒加载按需展开。",
   "unity": "2021.3",
