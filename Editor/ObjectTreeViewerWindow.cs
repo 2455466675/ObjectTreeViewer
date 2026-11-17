@@ -189,19 +189,12 @@ namespace ObjectTreeViewerTool
                 Debug.Log($"成功获取对象: {result.Value.GetType().Name}");
                 targetObject = result.Value;
 
-                // 查询成功且路径不在预定义列表中，则记录为第一条并刷新下拉框
-                if (configStore.AddPathIfAbsent(path))
-                {
-                    presetSelectedIndex = 0;
-                    Debug.Log($"已将路径添加到预定义列表: {path}");
-                }
-                else
-                {
-                    // 已存在则同步下拉框选中项到该路径
-                    var idx = configStore.Paths.IndexOf(path.Trim());
-                    if (idx >= 0)
-                        presetSelectedIndex = idx;
-                }
+                // 查询成功的路径记入预定义列表：不存在则插入首位，已存在则冒泡到首位（最近使用优先）
+                if (configStore.RecordPath(path))
+                    Debug.Log($"已将路径置为预定义列表首项: {path}");
+
+                // 该路径此时一定位于首位，下拉框同步选中它
+                presetSelectedIndex = 0;
 
                 RefreshTree();
             }

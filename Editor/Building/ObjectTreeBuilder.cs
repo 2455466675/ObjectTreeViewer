@@ -226,6 +226,7 @@ namespace ObjectTreeViewerTool
             if (value == null)
             {
                 node.IsClass = false;
+                node.IsEditable = false;
                 node.Value = "null";
                 node.CanExpand = false;
                 node.OriginalObject = null;
@@ -234,10 +235,11 @@ namespace ObjectTreeViewerTool
 
             var type = value.GetType();
 
-            // 字符串与简单值类型作为叶子
+            // 字符串与简单值类型作为叶子，可编辑
             if (type == typeof(string) || inspector.IsSimpleValueType(type))
             {
                 node.IsClass = false;
+                node.IsEditable = true;
                 node.Value = value.ToString();
                 node.CanExpand = false;
                 node.OriginalObject = value;
@@ -248,6 +250,7 @@ namespace ObjectTreeViewerTool
             if (!type.IsValueType && node.IsCycle(value))
             {
                 node.IsClass = false;
+                node.IsEditable = false;
                 node.Value = "循环引用";
                 node.CanExpand = false;
                 node.OriginalObject = null;
@@ -262,6 +265,7 @@ namespace ObjectTreeViewerTool
         private void DescribeComposite(ObjectTreeNode node, object value)
         {
             node.IsClass = true;
+            node.IsEditable = false;
             var type = value.GetType();
             node.Type = inspector.GetCSharpTypeName(type);
 
@@ -303,6 +307,7 @@ namespace ObjectTreeViewerTool
             var data = new ObjectTreeNode(parent, NextId(), false, name, $"获取失败: {e.Message}", "Error")
             {
                 Depth = parent.Depth + 1,
+                IsEditable = false,
             };
             parent.AddChild(data);
         }
@@ -312,6 +317,7 @@ namespace ObjectTreeViewerTool
             var data = new ObjectTreeNode(parent, NextId(), false, name, message, "")
             {
                 Depth = parent.Depth + 1,
+                IsEditable = false,
             };
             parent.AddChild(data);
         }

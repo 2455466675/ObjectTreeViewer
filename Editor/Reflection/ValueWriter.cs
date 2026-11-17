@@ -33,19 +33,33 @@ namespace ObjectTreeViewerTool
         }
 
         /// <summary>
+        /// 该节点的值类型能否被 <see cref="ValueConverter"/> 解析。
+        /// 供界面在进入编辑前判断，保证“可编辑”与“能写回”是同一套判定。
+        /// </summary>
+        public bool CanConvert(ObjectTreeNode node)
+        {
+            return node != null && node.IsEditable && converter.CanConvert(node.ValueType);
+        }
+
+        /// <summary>
         /// 将文本值写回到节点对应的字段/属性/容器元素。
         /// </summary>
         public WriteResult Write(ObjectTreeNode node, string newValueText)
         {
+            if (node == null)
+                return WriteResult.Fail("节点为空，无法修改值");
+
+            if (!node.IsEditable)
+                return WriteResult.Fail($"{node.Name} 不是可编辑的叶子值");
+
             try
             {
                 var targetObj = node.Parent?.OriginalObject;
                 if (targetObj == null)
                     return WriteResult.Fail("无法获取父对象，无法修改值");
 
-                object convertedValue = converter.Convert(newValueText, node.Type);
-                if (convertedValue == null && node.Type != "null" && node.Type != "string")
-                    return WriteResult.Fail($"值转换失败: {newValueText} -> {node.Type}");
+                if (!converter.TryConvert(newValueText, node.ValueType, out var convertedValue, out var convertError))
+                    return WriteResult.Fail($"值转换失败: {convertError}");
 
                 // 通过反射字段/属性写回
                 if (node.SourceField != null)

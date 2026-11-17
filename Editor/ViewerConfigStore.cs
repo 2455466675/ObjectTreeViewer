@@ -24,7 +24,7 @@ namespace ObjectTreeViewerTool
         // UserSettings 是 Unity 约定的“工程内、用户私有、默认不入版本库”目录
         private const string UserSettingsFolderName = "UserSettings";
 
-        // 预定义路径记录上限，超出时移除最旧的一条（列表末尾），避免文件无限增长
+        // 预定义路径记录上限，超出时移除末尾（最久未使用）的一条，避免文件无限增长
         private const int MaxPathCount = 100;
 
         private static readonly string[] DefaultExcludedNamespacePrefixes =
@@ -102,21 +102,28 @@ namespace ObjectTreeViewerTool
         }
 
         /// <summary>
-        /// 若路径不在预定义列表中，则将其插入为第一条并写回 JSON。
-        /// 返回 true 表示发生了新增（已落盘）。
+        /// 记录一条查询成功的路径，按“最近使用优先”维护列表顺序：
+        /// 不存在则插入首位；已存在则冒泡到首位（原位置移除）；已在首位则什么都不做。
+        /// 返回 true 表示列表顺序确实发生了变化并已写回 JSON。
         /// </summary>
-        public bool AddPathIfAbsent(string path)
+        public bool RecordPath(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
                 return false;
 
             path = path.Trim();
-            if (Paths.Contains(path))
+
+            var existingIndex = Paths.IndexOf(path);
+            // 已在首位：无需重排，也避免每次重复查询都写盘
+            if (existingIndex == 0)
                 return false;
+
+            if (existingIndex > 0)
+                Paths.RemoveAt(existingIndex);
 
             Paths.Insert(0, path);
 
-            // 新记录插入到首位，超过上限时丢弃末尾（最旧）的记录
+            // 新记录插入到首位，超过上限时丢弃末尾（最久未使用）的记录
             if (Paths.Count > MaxPathCount)
                 Paths.RemoveRange(MaxPathCount, Paths.Count - MaxPathCount);
 

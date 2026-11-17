@@ -177,13 +177,17 @@ namespace ObjectTreeViewerTool
             return null;
         }
 
-        /// <summary>判断节点的值是否可编辑。</summary>
+        /// <summary>
+        /// 判断节点的值是否可编辑。占位/错误提示行、null 值、循环引用与复合节点由
+        /// <see cref="ObjectTreeNode.IsEditable"/> 统一挡掉；类型是否可解析则与
+        /// <see cref="ValueWriter"/> 共用同一套判定，避免进入必然失败的编辑流程。
+        /// </summary>
         private bool CanEditValue(ObjectTreeNode node)
         {
             if (node == null) return false;
-            if (node.IsClass) return false;
-            if (node.CanExpand) return false;
-            if (node.Value == "null" || node.Value == "循环引用") return false;
+            if (!node.IsEditable) return false;
+            if (node.IsClass || node.CanExpand) return false;
+            if (!valueWriter.CanConvert(node)) return false;
             // 结构体字段不可编辑（修改 struct 字段需写回整个 struct，实现复杂）
             if (IsStructField(node)) return false;
             return true;

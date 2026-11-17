@@ -110,10 +110,16 @@ namespace ObjectTreeViewerTool
     }
 
     /// <summary>
-    /// 按配置的前缀列表判断类型的命名空间是否应被排除。
+    /// 按配置的命名空间前缀判断类型是否应被排除。
     /// </summary>
     internal static class NamespaceExclusion
     {
+        /// <summary>
+        /// 按命名空间段边界做前缀匹配：配置 "UnityEngine" 命中 "UnityEngine" 与 "UnityEngine.UI"，
+        /// 但不命中 "UnityEngineExtensions"；配置 "System.Reflection" 同样不会误伤 "System.ReflectionX"。
+        /// 用序数比较代替 StartsWith(prefix + ".")，避免每次判定都为拼接分配字符串——
+        /// 该方法位于构建期的热路径上（每个成员、每个节点都要判定一次）。
+        /// </summary>
         public static bool IsExcluded(Type type, IReadOnlyList<string> excludedNamespacePrefixes)
         {
             if (type == null || excludedNamespacePrefixes == null || excludedNamespacePrefixes.Count == 0)
@@ -123,9 +129,24 @@ namespace ObjectTreeViewerTool
             if (string.IsNullOrEmpty(ns))
                 return false;
 
-            foreach (var prefix in excludedNamespacePrefixes)
+            for (int i = 0; i < excludedNamespacePrefixes.Count; i++)
             {
-                if (!string.IsNullOrEmpty(prefix) && ns.StartsWith(prefix, StringComparison.Ordinal))
+                var prefix = excludedNamespacePrefixes[i];
+                if (string.IsNullOrEmpty(prefix))
+                    continue;
+
+                if (ns.Length == prefix.Length)
+                {
+                    // 完全相同的命名空间
+                    if (string.Equals(ns, prefix, StringComparison.Ordinal))
+                        return true;
+                    continue;
+                }
+
+                // 只认 "prefix." 开头的子命名空间，拒绝 "prefixExtra" 这类同前缀的无关命名空间
+                if (ns.Length > prefix.Length &&
+                    ns[prefix.Length] == '.' &&
+                    string.CompareOrdinal(ns, 0, prefix, 0, prefix.Length) == 0)
                     return true;
             }
 

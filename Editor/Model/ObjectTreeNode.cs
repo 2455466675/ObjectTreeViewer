@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 
@@ -30,6 +31,22 @@ namespace ObjectTreeViewerTool
         /// <summary>节点承载的真实对象，编辑与展开时使用。</summary>
         public object OriginalObject { get; set; }
 
+        /// <summary>
+        /// 节点承载值的真实类型，编辑时用于值转换（而非显示用的类型名字符串）。
+        /// 优先取运行时类型：源字段声明为 object 而实际存的是 int 时，仍应按 int 来编辑。
+        /// </summary>
+        public Type ValueType
+        {
+            get
+            {
+                var obj = OriginalObject;
+                if (obj != null)
+                    return obj.GetType();
+
+                return SourceField?.FieldType ?? SourceProperty?.PropertyType;
+            }
+        }
+
         /// <summary>来源字段（若该节点由字段产生）。</summary>
         public FieldInfo SourceField { get; set; }
 
@@ -50,6 +67,13 @@ namespace ObjectTreeViewerTool
         /// 由构建时依据值的类型廉价判定，用于决定是否显示展开箭头，无需真正构建子节点。
         /// </summary>
         public bool CanExpand { get; set; }
+
+        /// <summary>
+        /// 节点是否为可编辑的叶子值（真实标量/字符串）。
+        /// 复合节点、null 值、循环引用，以及“已截断”“获取失败”这类占位/错误提示行
+        /// 都由构建器标记为 false，避免界面进入必然失败的编辑流程。
+        /// </summary>
+        public bool IsEditable { get; set; }
 
         /// <summary>子节点是否已构建。懒加载下仅在首次展开时置为 true。</summary>
         public bool ChildrenBuilt { get; set; }
